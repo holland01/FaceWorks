@@ -1,0 +1,6 @@
+*.vcxproj
+*.vcxproj.*
+./lib/*
+./redist/*
+**/bin/*
+**/build/*
