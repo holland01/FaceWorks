@@ -34,6 +34,7 @@
 #include <DirectXMath.h>
 
 #include <DXUT/Core/DXUT.h>
+#include <DXUT/Core/ScreenGrab.h>
 #include <DXUT/Optional/DXUTcamera.h>
 #include <DXUT/Optional/DXUTgui.h>
 #include <DXUT/Optional/SDKmisc.h>
@@ -245,8 +246,6 @@ void CopyTexture(
 #	define NV(x)			x
 #	define NV_RETURN(x)		{ GFSDK_FaceWorks_Result res = (x); if (res != GFSDK_FaceWorks_OK) { return E_FAIL; } }
 #endif
-
-
 
 HRESULT InitScene()
 {
@@ -820,6 +819,8 @@ void CALLBACK OnD3D11FrameRender(
 	}
 
 	g_gpuProfiler.EndFrame(pd3dContext);
+
+
 }
 
 
@@ -1361,6 +1362,14 @@ void CALLBACK OnKeyboard(UINT nChar, bool bKeyDown, bool /*bAltDown*/, void * /*
 	case VK_F8:
 		g_pSceneCur = &g_sceneTest;
 		g_HUD.GetComboBox(IDC_SCENE)->SetSelectedByData(&g_sceneTest);
+		break;
+
+	case VK_F9:
+	{
+		
+
+		DirectX::TakeScreenshot( DXUTGetD3D11Device(), DXUTGetDXGISwapChain(), L"test_output.png" );
+	}
 		break;
 
 	case 'G':
