@@ -34,7 +34,6 @@
 #include <DirectXMath.h>
 
 #include <DXUT/Core/DXUT.h>
-#include <DXUT/Core/ScreenGrab.h>
 #include <DXUT/Optional/DXUTcamera.h>
 #include <DXUT/Optional/DXUTgui.h>
 #include <DXUT/Optional/SDKmisc.h>
@@ -819,11 +818,7 @@ void CALLBACK OnD3D11FrameRender(
 	}
 
 	g_gpuProfiler.EndFrame(pd3dContext);
-
-
 }
-
-
 
 bool CALLBACK IsD3D11DeviceAcceptable(
 	const CD3D11EnumAdapterInfo * /*AdapterInfo*/,
@@ -856,6 +851,10 @@ bool CALLBACK ModifyDeviceSettings(DXUTDeviceSettings * pDeviceSettings, void * 
 		// Request 4x MSAA
 		pDeviceSettings->d3d11.sd.SampleDesc.Count = 4;
 	}
+
+#if defined(_DEBUG)
+	pDeviceSettings->d3d11.UseDebugLayer = true;
+#endif
 
 	return true;
 }
@@ -1365,11 +1364,8 @@ void CALLBACK OnKeyboard(UINT nChar, bool bKeyDown, bool /*bAltDown*/, void * /*
 		break;
 
 	case VK_F9:
-	{
-		
-
-		DirectX::TakeScreenshot( DXUTGetD3D11Device(), DXUTGetDXGISwapChain(), L"test_output.png" );
-	}
+		DXUTSetScreenShotNameToDateTime();
+		DXUTTakeScreenShot();
 		break;
 
 	case 'G':
@@ -1454,6 +1450,7 @@ void RenderText()
 			L"Toggle Tessellation: Y\n"
 			L"Reload Runtime-Compiled Shaders: R\n"
 			L"Toggle Help: F1\n"
+			L"Take Screen Shot (.bmp): F9\n"
 			L"Quit: Esc\n"
 			);
 	}
