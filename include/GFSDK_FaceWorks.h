@@ -221,8 +221,6 @@ typedef struct
 /// \param pBlob the error blob object
 GFSDK_FACEWORKS_API void GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_FreeErrorBlob(GFSDK_FaceWorks_ErrorBlob * pBlob);
 
-
-
 // =================================================================================
 //	Initialization
 // =================================================================================
@@ -238,7 +236,29 @@ inline GFSDK_FaceWorks_Result GFSDK_FaceWorks_Init() {
 	return GFSDK_FaceWorks_Init_Internal(GFSDK_FaceWorks_HeaderVersion);
 }
 
+// =================================================================================
+//	Profiling
+// =================================================================================
 
+/// Provides the caller with an info string detailing the results of profiled functions. 
+/// Note that after this is called all data used to produce the info string will be freed. 
+/// The user is responsible for freeing the returned info string, but should call GFSDK_FaceWorks_Profiler_FreeInfoString(char * pInfoString);
+///
+/// \param pAllocator			[in] the allocator to use for producing the string.
+/// \param ppOutString			[out] pointer to pointer to unallocated buffer which will be allocated by this function, or NULL if there isn't any info.
+/// \param pOutStringLength		[out] pointer to allocated buffer length, or 0 if there isn't any info.
+///
+///	\return GFSDK_FaceWorks_OK if none of the params are NULL, otherwise GFSDK_FaceWorks_InvalidArgument.
+///		If there isn't any profiling data available, ppOutString is set to NULL, and pOutStringLength set to 0.
+GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_Profiler_GetInfoString(gfsdk_new_delete_t * pAllocator, char ** ppOutString, size_t * pOutStringLength);
+
+
+/// Frees the string buffer returned from GFSDK_FaceWorks_Profiler_GetInfoString. No validation is currently performed to ensure
+/// that the string actually came from GFSDK_FaceWorks_Profiler_GetInfoString.
+///
+/// \param pAllocator			[in] the allocator used.
+/// \param pInfoString			[in] the string returned from GFSDK_FaceWorks_Profiler_FreeInfoString() to free.
+GFSDK_FACEWORKS_API void GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_Profiler_FreeInfoString(gfsdk_new_delete_t * pAllocator, char * pInfoString);
 
 // =================================================================================
 //	Building mesh data for SSS

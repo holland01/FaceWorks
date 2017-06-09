@@ -39,8 +39,13 @@
 #include <cmath>
 #include <cstdarg>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include <GFSDK_FaceWorks.h>
+
+#include <Windows.h>
 
 using std::min;
 using std::max;
@@ -54,7 +59,6 @@ template <typename T, int N> char (&dim_helper(T (&)[N]))[N];
 #if defined(_MSC_VER) && (_MSC_VER < 1800)
 inline float log2(float x) { return 1.442695041f * logf(x); }
 #endif
-
 
 
 // Shared constant buffer data for SSS and deep scatter;
@@ -148,11 +152,123 @@ public:
 	}
 };
 
-
-
 // Error blob helper functions
 void BlobPrintf(GFSDK_FaceWorks_ErrorBlob * pBlob, const char * fmt, ...);
 #define ErrPrintf(...) BlobPrintf(pErrorBlobOut, "Error: " __VA_ARGS__)
 #define WarnPrintf(...) BlobPrintf(pErrorBlobOut, "Warning: " __VA_ARGS__)
+
+// Profiling
+
+void ProfilerPushTime(const char * pInfoString, double seconds);
+
+struct FaceWorks_Profiler
+{
+	LARGE_INTEGER m_begin;
+	LARGE_INTEGER m_end;
+	LARGE_INTEGER m_freq;
+
+	// limit 256, allow extra 8 aligned bytes for null term
+	char m_info_str[264]; 
+
+	bool m_did_start;
+
+	GFSDK_FaceWorks_ErrorBlob * pErrorBlobOut;
+
+	explicit FaceWorks_Profiler(const char * name = nullptr, const char * fun = nullptr, GFSDK_FaceWorks_ErrorBlob * pBlob = nullptr)
+		:	m_did_start(false),
+			pErrorBlobOut(pBlob)
+			
+	{
+		memset(&m_begin, 0, sizeof(m_begin));
+		memset(&m_end, 0, sizeof(m_end));
+		memset(&m_freq, 0, sizeof(m_freq));
+		memset(m_info_str, 0, sizeof(m_info_str));
+
+		if (name && fun)
+		{
+			const char * prefix = "FaceWorks_Profiler: ";
+			size_t prefixLen = strlen(prefix);
+
+			memcpy_s(m_info_str, prefixLen, prefix, prefixLen);
+
+			size_t name_sz = strlen(name);
+
+			name_sz = min(strlen(name), 64ull);
+			
+			memcpy_s(&m_info_str[prefixLen], name_sz, name, name_sz);
+
+			name_sz += prefixLen;
+
+			size_t fun_sz = min(strlen(fun), 64ull);
+			size_t len = min((size_t)(256ull - name_sz), fun_sz);
+
+			memcpy_s(&m_info_str[name_sz], len, fun, len);
+		}
+		else
+		{
+			strcpy_s(m_info_str, "FaceWorks_Profiler: INVALID INFO RECEIVED");
+		}
+
+		if (!QueryPerformanceFrequency(&m_freq))
+		{
+			if (pErrorBlobOut)
+			{
+				ErrPrintf("[%s] QueryPerformanceCounter failed with error %lu\n", m_info_str, GetLastError());
+			}
+		}
+	}
+
+	~FaceWorks_Profiler(void)
+	{
+		if (m_did_start)
+		{
+			stop();
+
+			LARGE_INTEGER diff;
+			diff.QuadPart = m_end.QuadPart - m_begin.QuadPart;
+			
+			double nanoSecsPerTick = 1.0 / (double)m_freq.QuadPart;
+			double secs = (double)diff.QuadPart * nanoSecsPerTick;
+
+			ProfilerPushTime(m_info_str, secs);
+		}
+	}
+
+	void try_query_and_report_err(LARGE_INTEGER & which)
+	{
+		if (!QueryPerformanceCounter(&which))
+		{
+			if (pErrorBlobOut)
+			{
+				ErrPrintf("[%s] QueryPerformanceCounter failed with error %lu\n", m_info_str, GetLastError()); 
+			}
+		}
+	}
+
+	void start(void)
+	{
+		if (!m_did_start)
+		{
+			try_query_and_report_err(m_begin);
+			
+			m_did_start = true;
+		}
+	}
+
+	void stop(void)
+	{
+		if (m_did_start)
+		{
+			try_query_and_report_err(m_end);
+		}
+	}
+};
+
+#if defined(_DEBUG)
+#	define DeclFaceWorksDebugProfiler(name) \
+		FaceWorks_Profiler name(#name, __FUNCTION__, pErrorBlobOut)
+#else
+#	define DeclFaceWorksDebugProfiler(name)
+#endif
 
 #endif // GFSDK_FACEWORKS_INTERNAL_H
