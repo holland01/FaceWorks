@@ -76,8 +76,6 @@ struct CBData
 	float	m_decodeDepthScale, m_decodeDepthBias;
 };
 
-
-
 // Memory allocation helper functions
 
 inline void * FaceWorks_Malloc(size_t bytes, const gfsdk_new_delete_t & allocator)
@@ -170,12 +168,12 @@ struct FaceWorks_Profiler
 	// limit 256, allow extra 8 aligned bytes for null term
 	char m_info_str[264]; 
 
-	bool m_did_start;
+	bool m_did_start, m_is_dummy;
 
 	GFSDK_FaceWorks_ErrorBlob * pErrorBlobOut;
 
 	explicit FaceWorks_Profiler(const char * name = nullptr, const char * fun = nullptr, GFSDK_FaceWorks_ErrorBlob * pBlob = nullptr)
-		:	m_did_start(false),
+		:	m_did_start(false), m_is_dummy(false),
 			pErrorBlobOut(pBlob)
 			
 	{
@@ -198,23 +196,27 @@ struct FaceWorks_Profiler
 			memcpy_s(&m_info_str[prefixLen], name_sz, name, name_sz);
 
 			name_sz += prefixLen;
+			
+			m_info_str[name_sz] = '|';
+
+			name_sz++;
 
 			size_t fun_sz = min(strlen(fun), 64ull);
 			size_t len = min((size_t)(256ull - name_sz), fun_sz);
 
 			memcpy_s(&m_info_str[name_sz], len, fun, len);
+		
+			if (!QueryPerformanceFrequency(&m_freq))
+			{
+				if (pErrorBlobOut)
+				{
+					ErrPrintf("[%s] QueryPerformanceCounter failed with error %lu\n", m_info_str, GetLastError());
+				}
+			}
 		}
 		else
 		{
-			strcpy_s(m_info_str, "FaceWorks_Profiler: INVALID INFO RECEIVED");
-		}
-
-		if (!QueryPerformanceFrequency(&m_freq))
-		{
-			if (pErrorBlobOut)
-			{
-				ErrPrintf("[%s] QueryPerformanceCounter failed with error %lu\n", m_info_str, GetLastError());
-			}
+			m_is_dummy = true;
 		}
 	}
 
@@ -247,7 +249,7 @@ struct FaceWorks_Profiler
 
 	void start(void)
 	{
-		if (!m_did_start)
+		if (!m_did_start && !m_is_dummy)
 		{
 			try_query_and_report_err(m_begin);
 			
@@ -257,18 +259,21 @@ struct FaceWorks_Profiler
 
 	void stop(void)
 	{
-		if (m_did_start)
+		if (m_did_start && !m_is_dummy)
 		{
 			try_query_and_report_err(m_end);
 		}
 	}
 };
 
+// debug variant is used; release variant is the dummy, which does nothing.
+
 #if defined(_DEBUG)
 #	define DeclFaceWorksDebugProfiler(name) \
 		FaceWorks_Profiler name(#name, __FUNCTION__, pErrorBlobOut)
 #else
-#	define DeclFaceWorksDebugProfiler(name)
+#	define DeclFaceWorksDebugProfiler(name) \
+		FaceWorks_Profiler name(nullptr, nullptr, nullptr)
 #endif
 
 #endif // GFSDK_FACEWORKS_INTERNAL_H

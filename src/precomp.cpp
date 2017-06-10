@@ -145,12 +145,17 @@ GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWo
 	}
 
 	size_t len = outStream.str().size();
-	*pOutStringLength = len + 1;
-	*ppOutString = (char *) FaceWorks_Malloc(*pOutStringLength, *pAllocator);
+	*pOutStringLength = len;
+	*ppOutString = (char *) FaceWorks_Malloc(*pOutStringLength + 1, *pAllocator);
 
-	ppOutString[*pOutStringLength] = '\0';
+	if (!(*ppOutString))
+	{
+		return GFSDK_FaceWorks_OutOfMemory;
+	}
 
-	memcpy_s(ppOutString, *pOutStringLength, outStream.str().c_str(), len);
+	(*ppOutString)[*pOutStringLength] = '\0';
+
+	memcpy_s(*ppOutString, len, outStream.str().c_str(), len);
 
 	return GFSDK_FaceWorks_OK;
 }
@@ -158,14 +163,6 @@ GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWo
 GFSDK_FACEWORKS_API void GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_Profiler_FreeInfoString(gfsdk_new_delete_t * pAllocator, char * pInfoString)
 {
 	FaceWorks_Free(pInfoString, *pAllocator);
-}
-
-GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_Init_Internal(int headerVersion)
-{
-	if (headerVersion != GFSDK_FaceWorks_GetBinaryVersion())
-		return GFSDK_FaceWorks_VersionMismatch;
-
-	return GFSDK_FaceWorks_OK;
 }
 
 // Error blob helper functions
@@ -224,6 +221,17 @@ GFSDK_FACEWORKS_API void GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_FreeErrorBlob(
 GFSDK_FACEWORKS_API size_t GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_CalculateCurvatureSizeBytes(int vertexCount)
 {
 	return sizeof(float) * max(0, vertexCount);
+}
+
+static inline float ExtractSSE(DirectX::XMVECTOR v, int index)
+{
+	uint32_t* b = (uint32_t *)&v;
+
+	b += index;
+
+	float ret = *((float*)b);
+
+	return ret;
 }
 
 GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_CalculateMeshCurvature(
@@ -310,244 +318,169 @@ GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWo
 		std::vector<float, FaceWorks_Allocator<float>> curvatureMax(vertexCount, 0.0f, allocFloat);
 
 		// !!!UNDONE: SIMD-ize or GPU-ize all this math
+		auto LCalcCurvature = [&curvatureMin, &curvatureMax](int from, int to, int * indices, float ** pos, float ** normal)
+		{
 #ifdef GFSDK_FACEWORKS_SIMD_PRECOMP
-		DeclFaceWorksDebugProfiler(DebugProfileWithSIMD);
+			using namespace DirectX;
 
-		DebugProfileWithSIMD.start();
+			XMVECTOR vA = XMVectorSet(pos[to][0], pos[to][1], pos[to][2], 0.0f);
+			XMVECTOR vB = XMVectorSet(pos[from][0], pos[from][1], pos[from][2], 0.0f);
 
-		using namespace DirectX;
+			XMVECTOR dP = XMVectorSubtract(vA, vB);
+			dP = _mm_mul_ps(dP, dP);
 
-		XMVECTOR pow2 = XMVectorSplatConstant(4, 1);
+			uint32_t * b = (uint32_t *)&dP;
+			
+			float dPx = *((float *)(b));
+			float dPy = *((float *)(b + 1));
+			float dPz = *((float *)(b + 2));
 
-		for (int iTri = 0; iTri < triCount; ++iTri)
-		{
-			int indices[] =
-			{
-				pIndices[3 * iTri],
-				pIndices[3 * iTri + 1],
-				pIndices[3 * iTri + 2],
-			};
+			XMVECTOR vC = XMVectorSet(normal[to][0], normal[to][1], normal[to][2], 0.0f);
+			XMVECTOR vD = XMVectorSet(normal[from][0], normal[from][1], normal[from][2], 0.0f);
+			XMVECTOR dN = XMVectorSubtract(vC, vD);
+			dN = _mm_mul_ps(dN, dN);
 
-			float * pos[] =
-			{
-				reinterpret_cast<float *>((char *)pPositions + indices[0] * positionStrideBytes),
-				reinterpret_cast<float *>((char *)pPositions + indices[1] * positionStrideBytes),
-				reinterpret_cast<float *>((char *)pPositions + indices[2] * positionStrideBytes),
-			};
+			b = (uint32_t *)&dN;
 
-			float * normal[] =
-			{
-				reinterpret_cast<float *>((char *)pNormals + indices[0] * normalStrideBytes),
-				reinterpret_cast<float *>((char *)pNormals + indices[1] * normalStrideBytes),
-				reinterpret_cast<float *>((char *)pNormals + indices[2] * normalStrideBytes),
-			};
+			float dNx = *((float *)(b)); 
+			float dNy = *((float *)(b + 1));
+			float dNz = *((float *)(b + 2));
 
-			// Calculate each edge's curvature - most edges will be calculated twice this
-			// way, but it's hard to fix that while still making sure to handle boundary edges.
-
-			{
-				XMVECTOR vA = XMVectorSet(pos[1][0], pos[1][1], pos[1][2], 0.0f);
-				XMVECTOR vB = XMVectorSet(pos[0][0], pos[0][1], pos[0][2], 0.0f);
-				XMVECTOR vC = XMVectorSet(normal[1][0], normal[1][1], normal[1][2], 0.0f);
-				XMVECTOR vD = XMVectorSet(normal[0][0], normal[0][1], normal[0][2], 0.0f);
-
-				XMVECTOR dP = XMVectorSubtract(vA, vB);
-				XMVECTOR dN = XMVectorSubtract(vC, vD);
-
-				dN = XMVectorPow(XMVector3Length(dN), pow2);
-				dP = XMVectorPow(XMVector3Length(dP), pow2);
-
-				float curvature = XMVectorGetX(XMVectorSqrt(XMVectorDivide(dN, dP)));
-
-				curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
-				curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
-				curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
-				curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
-			}
-
-			/*
-			float dPx = pos[1][0] - pos[0][0];
-			float dPy = pos[1][1] - pos[0][1];
-			float dPz = pos[1][2] - pos[0][2];
-			float dNx = normal[1][0] - normal[0][0];
-			float dNy = normal[1][1] - normal[0][1];
-			float dNz = normal[1][2] - normal[0][2];
-			float curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-			curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
-			curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
-			curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
-			curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
-			*/
-
-			{
-				XMVECTOR vA = XMVectorSet(pos[2][0], pos[2][1], pos[2][2], 0.0f);
-				XMVECTOR vB = XMVectorSet(pos[1][0], pos[1][1], pos[1][2], 0.0f);
-				XMVECTOR vC = XMVectorSet(normal[2][0], normal[2][1], normal[2][2], 0.0f);
-				XMVECTOR vD = XMVectorSet(normal[1][0], normal[1][1], normal[1][2], 0.0f);
-
-				XMVECTOR dP = XMVectorSubtract(vA, vB);
-				XMVECTOR dN = XMVectorSubtract(vC, vD);
-
-				dN = XMVectorPow(XMVector3Length(dN), pow2);
-				dP = XMVectorPow(XMVector3Length(dP), pow2);
-
-				float curvature = XMVectorGetX(XMVectorSqrt(XMVectorDivide(dN, dP)));
-
-				curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
-				curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
-				curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
-				curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
-			}
-
-
-
-			/*
-
-			dPx = pos[2][0] - pos[1][0];
-			dPy = pos[2][1] - pos[1][1];
-			dPz = pos[2][2] - pos[1][2];
-			dNx = normal[2][0] - normal[1][0];
-			dNy = normal[2][1] - normal[1][1];
-			dNz = normal[2][2] - normal[1][2];
-			curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-			curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
-			curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
-			curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
-			curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
-
-			*/
-
-			{
-				XMVECTOR vA = XMVectorSet(pos[0][0], pos[0][1], pos[0][2], 0.0f);
-				XMVECTOR vB = XMVectorSet(pos[2][0], pos[2][1], pos[2][2], 0.0f);
-				XMVECTOR vC = XMVectorSet(normal[0][0], normal[0][1], normal[0][2], 0.0f);
-				XMVECTOR vD = XMVectorSet(normal[2][0], normal[2][1], normal[2][2], 0.0f);
-
-				XMVECTOR dP = XMVectorSubtract(vA, vB);
-				XMVECTOR dN = XMVectorSubtract(vC, vD);
-
-				dN = XMVectorPow(XMVector3Length(dN), pow2);
-				dP = XMVectorPow(XMVector3Length(dP), pow2);
-
-				float curvature = XMVectorGetX(XMVectorSqrt(XMVectorDivide(dN, dP)));
-
-				curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
-				curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
-				curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
-				curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
-				/*
-				float dPx = pos[0][0] - pos[2][0];
-				float dPy = pos[0][1] - pos[2][1];
-				float dPz = pos[0][2] - pos[2][2];
-				float dNx = normal[0][0] - normal[2][0];
-				float dNy = normal[0][1] - normal[2][1];
-				float dNz = normal[0][2] - normal[2][2];
-				float curvature2 = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-				
-				if (curvature2 != curvature)
-				{
-					printf("Difference: %f, %f", curvature, curvature2);
-				}
-				*/
-			}
-
-			/*
-
-			dPx = pos[0][0] - pos[2][0];
-			dPy = pos[0][1] - pos[2][1];
-			dPz = pos[0][2] - pos[2][2];
-			dNx = normal[0][0] - normal[2][0];
-			dNy = normal[0][1] - normal[2][1];
-			dNz = normal[0][2] - normal[2][2];
-			curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-			curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
-			curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
-			curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
-			curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
-
-			*/
-		}
-
-		for (int i = 0; i < vertexCount; ++i)
-		{
-			float * pCurvature = reinterpret_cast<float *>((char *)pCurvaturesOut + i * curvatureStrideBytes);
-			*pCurvature = 0.5f * (curvatureMin[i] + curvatureMax[i]);
-		}
+			float curvature = sqrtf((dNx + dNy + dNz) / (dPx + dPy + dPz));
 #else
-		DeclFaceWorksDebugProfiler(DebugProfileWithOutSIMD);
+			float dPx = pos[to][0] - pos[from][0];
+			float dPy = pos[to][1] - pos[from][1];
+			float dPz = pos[to][2] - pos[from][2];
+			
+			float dNx = normal[to][0] - normal[from][0];
+			float dNy = normal[to][1] - normal[from][1];
+			float dNz = normal[to][2] - normal[from][2];
 
-		DebugProfileWithOutSIMD.start();
-
-		for (int iTri = 0; iTri < triCount; ++iTri)
-		{
-			int indices[] =
-			{
-				pIndices[3*iTri],
-				pIndices[3*iTri + 1],
-				pIndices[3*iTri + 2],
-			};
-
-			float * pos[] =
-			{
-				reinterpret_cast<float *>((char *)pPositions + indices[0] * positionStrideBytes),
-				reinterpret_cast<float *>((char *)pPositions + indices[1] * positionStrideBytes),
-				reinterpret_cast<float *>((char *)pPositions + indices[2] * positionStrideBytes),
-			};
-
-			float * normal[] =
-			{
-				reinterpret_cast<float *>((char *)pNormals + indices[0] * normalStrideBytes),
-				reinterpret_cast<float *>((char *)pNormals + indices[1] * normalStrideBytes),
-				reinterpret_cast<float *>((char *)pNormals + indices[2] * normalStrideBytes),
-			};
-
-			// Calculate each edge's curvature - most edges will be calculated twice this
-			// way, but it's hard to fix that while still making sure to handle boundary edges.
-
-			float dPx = pos[1][0] - pos[0][0];
-			float dPy = pos[1][1] - pos[0][1];
-			float dPz = pos[1][2] - pos[0][2];
-			float dNx = normal[1][0] - normal[0][0];
-			float dNy = normal[1][1] - normal[0][1];
-			float dNz = normal[1][2] - normal[0][2];
 			float curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-			curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
-			curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
-			curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
-			curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
+#endif
+			curvatureMin[indices[from]] = min(curvatureMin[indices[from]], curvature);
+			curvatureMin[indices[to]] = min(curvatureMin[indices[to]], curvature);
+			curvatureMax[indices[from]] = max(curvatureMax[indices[from]], curvature);
+			curvatureMax[indices[to]] = max(curvatureMax[indices[to]], curvature);
+		};
 
-			dPx = pos[2][0] - pos[1][0];
-			dPy = pos[2][1] - pos[1][1];
-			dPz = pos[2][2] - pos[1][2];
-			dNx = normal[2][0] - normal[1][0];
-			dNy = normal[2][1] - normal[1][1];
-			dNz = normal[2][2] - normal[1][2];
-			curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-			curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
-			curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
-			curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
-			curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
-
-			dPx = pos[0][0] - pos[2][0];
-			dPy = pos[0][1] - pos[2][1];
-			dPz = pos[0][2] - pos[2][2];
-			dNx = normal[0][0] - normal[2][0];
-			dNy = normal[0][1] - normal[2][1];
-			dNz = normal[0][2] - normal[2][2];
-			curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
-			curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
-			curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
-			curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
-			curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
-		}
-
-		for (int i = 0; i < vertexCount; ++i)
 		{
-			float * pCurvature = reinterpret_cast<float *>((char *)pCurvaturesOut + i * curvatureStrideBytes);
-			*pCurvature = 0.5f * (curvatureMin[i] + curvatureMax[i]);
+#ifdef GFSDK_FACEWORKS_SIMD_PRECOMP
+			DeclFaceWorksDebugProfiler(DebugProfileWithSIMD);
+			DebugProfileWithSIMD.start();
+#else
+			DeclFaceWorksDebugProfiler(DebugProfileWithOutSIMD);
+			DebugProfileWithOutSIMD.start();
+#endif
+
+			for (int iTri = 0; iTri < triCount; ++iTri)
+			{
+				int indices[] =
+				{
+					pIndices[3 * iTri],
+					pIndices[3 * iTri + 1],
+					pIndices[3 * iTri + 2],
+				};
+
+				float * pos[] =
+				{
+					reinterpret_cast<float *>((char *)pPositions + indices[0] * positionStrideBytes),
+					reinterpret_cast<float *>((char *)pPositions + indices[1] * positionStrideBytes),
+					reinterpret_cast<float *>((char *)pPositions + indices[2] * positionStrideBytes),
+				};
+
+				float * normal[] =
+				{
+					reinterpret_cast<float *>((char *)pNormals + indices[0] * normalStrideBytes),
+					reinterpret_cast<float *>((char *)pNormals + indices[1] * normalStrideBytes),
+					reinterpret_cast<float *>((char *)pNormals + indices[2] * normalStrideBytes),
+				};
+
+				// Calculate each edge's curvature - most edges will be calculated twice this
+				// way, but it's hard to fix that while still making sure to handle boundary edges.
+
+				LCalcCurvature(0, 1, indices, pos, normal);
+				LCalcCurvature(1, 2, indices, pos, normal);
+				LCalcCurvature(2, 0, indices, pos, normal);
+			}
+		}
+		/*
+#else
+		{
+			DeclFaceWorksDebugProfiler(DebugProfileWithOutSIMD);
+			DebugProfileWithOutSIMD.start();
+
+			for (int iTri = 0; iTri < triCount; ++iTri)
+			{
+				int indices[] =
+				{
+					pIndices[3*iTri],
+					pIndices[3*iTri + 1],
+					pIndices[3*iTri + 2],
+				};
+
+				float * pos[] =
+				{
+					reinterpret_cast<float *>((char *)pPositions + indices[0] * positionStrideBytes),
+					reinterpret_cast<float *>((char *)pPositions + indices[1] * positionStrideBytes),
+					reinterpret_cast<float *>((char *)pPositions + indices[2] * positionStrideBytes),
+				};
+
+				float * normal[] =
+				{
+					reinterpret_cast<float *>((char *)pNormals + indices[0] * normalStrideBytes),
+					reinterpret_cast<float *>((char *)pNormals + indices[1] * normalStrideBytes),
+					reinterpret_cast<float *>((char *)pNormals + indices[2] * normalStrideBytes),
+				};
+
+				// Calculate each edge's curvature - most edges will be calculated twice this
+				// way, but it's hard to fix that while still making sure to handle boundary edges.
+
+				float dPx = pos[1][0] - pos[0][0];
+				float dPy = pos[1][1] - pos[0][1];
+				float dPz = pos[1][2] - pos[0][2];
+				float dNx = normal[1][0] - normal[0][0];
+				float dNy = normal[1][1] - normal[0][1];
+				float dNz = normal[1][2] - normal[0][2];
+				float curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
+				curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
+				curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
+				curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
+				curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
+
+				dPx = pos[2][0] - pos[1][0];
+				dPy = pos[2][1] - pos[1][1];
+				dPz = pos[2][2] - pos[1][2];
+				dNx = normal[2][0] - normal[1][0];
+				dNy = normal[2][1] - normal[1][1];
+				dNz = normal[2][2] - normal[1][2];
+				curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
+				curvatureMin[indices[1]] = min(curvatureMin[indices[1]], curvature);
+				curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
+				curvatureMax[indices[1]] = max(curvatureMax[indices[1]], curvature);
+				curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
+
+				dPx = pos[0][0] - pos[2][0];
+				dPy = pos[0][1] - pos[2][1];
+				dPz = pos[0][2] - pos[2][2];
+				dNx = normal[0][0] - normal[2][0];
+				dNy = normal[0][1] - normal[2][1];
+				dNz = normal[0][2] - normal[2][2];
+				curvature = sqrtf((dNx*dNx + dNy*dNy + dNz*dNz) / (dPx*dPx + dPy*dPy + dPz*dPz));
+				curvatureMin[indices[2]] = min(curvatureMin[indices[2]], curvature);
+				curvatureMin[indices[0]] = min(curvatureMin[indices[0]], curvature);
+				curvatureMax[indices[2]] = max(curvatureMax[indices[2]], curvature);
+				curvatureMax[indices[0]] = max(curvatureMax[indices[0]], curvature);
+			}
 		}
 #endif
+*/
 		
+		for (int i = 0; i < vertexCount; ++i)
+		{
+			float * pCurvature = reinterpret_cast<float *>((char *)pCurvaturesOut + i * curvatureStrideBytes);
+			*pCurvature = 0.5f * (curvatureMin[i] + curvatureMax[i]);
+		}
 	}
 	catch (std::bad_alloc)
 	{
@@ -616,8 +549,6 @@ GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWo
 
 	return GFSDK_FaceWorks_OK;
 }
-
-
 
 GFSDK_FACEWORKS_API GFSDK_FaceWorks_Result GFSDK_FACEWORKS_CALLCONV GFSDK_FaceWorks_CalculateMeshUVScale(
 	int vertexCount,
