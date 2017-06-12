@@ -266,13 +266,11 @@ struct FaceWorks_Profiler
 	}
 };
 
-// debug variant is used; release variant is the dummy, which does nothing.
-
-#if defined(_DEBUG)
-#	define DeclFaceWorksDebugProfiler(name) \
+#if defined(GFSDK_FACEWORKS_INTERNAL_PROFILING)
+#	define DeclFaceWorksProfiler(name) \
 		FaceWorks_Profiler name(#name, __FUNCTION__, pErrorBlobOut)
 #else
-#	define DeclFaceWorksDebugProfiler(name) \
+#	define DeclFaceWorksProfiler(name) \
 		FaceWorks_Profiler name(nullptr, nullptr, nullptr)
 #endif
 
