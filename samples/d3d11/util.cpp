@@ -68,15 +68,37 @@ wstring StrPrintf(const wchar_t * fmt, ...)
 	return StrVprintf(fmt, args);
 }
 
+
+
 #if defined(_DEBUG)
+// This is currently only called by DebugPrintfA, so the
+// optimizer will remove this in a release build and
+// trigger a warning (which will result in an error if
+// the appropriate settings are enabled)
+static string StrVprintfA(const char * fmt, va_list args)
+{
+	int cChAlloc = _vscprintf(fmt, args) + 1;
+	string result = string(cChAlloc, '\0');
+	_vsnprintf_s(&result[0], cChAlloc, _TRUNCATE, fmt, args);
+	return result;
+}
+
 void DebugPrintf(const wchar_t * fmt, ...)
 {
 	va_list args;
 	va_start(args, fmt);
 	OutputDebugString(StrVprintf(fmt, args).c_str());
 }
+
+void DebugPrintfA(const char * fmt, ...)
+{
+	va_list args;
+	va_start(args, fmt);
+	OutputDebugStringA(StrVprintfA(fmt, args).c_str());
+}
 #else
 void DebugPrintf(const wchar_t * /*fmt*/, ...) {}
+void DebugPrintfA(const char * /*fmt*/, ...) {}
 #endif
 
 HRESULT LoadFile(const wchar_t * strFilename, vector<char> * pData, bool bText)

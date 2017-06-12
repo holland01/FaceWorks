@@ -47,14 +47,19 @@ template <typename T, int N> char (&dim_helper(T (&)[N]))[N];
 #define sizeof_field(S, m) (sizeof(((S*)0)->m))
 
 
-
 // General utilities
 std::wstring StrPrintf(const wchar_t * fmt, ...);
 void DebugPrintf(const wchar_t * fmt, ...);
+void DebugPrintfA(const char * fmt, ...);
 HRESULT LoadFile(const wchar_t * strFilename, std::vector<char> * pData, bool bText = false);
 const wchar_t * BaseFilename(const wchar_t * strFilename);
 void SetDebugName(ID3D11DeviceChild * pD3DObject, const char * strName);
 void SetDebugName(ID3D11DeviceChild * pD3DObject, const wchar_t * strName);
+
+
+// Generic callbacks for gfsdk_new_delete_t
+void * MallocForFaceWorks(size_t bytes);
+void FreeForFaceWorks(void * p);
 
 
 
