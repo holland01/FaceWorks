@@ -61,6 +61,7 @@ bool g_bWireframe = false;
 bool g_bShowPerf = true;
 bool g_bCopyPerfToClipboard = false;
 bool g_bTessellation = true;
+bool g_bReportGFSDKProfileInfo = false;
 
 // DXUT callbacks
 
@@ -82,7 +83,7 @@ void RenderText();
 LRESULT CALLBACK MsgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool * pbNoFurtherProcessing, void * pUserContext);
 void CALLBACK OnKeyboard(UINT nChar, bool bKeyDown, bool bAltDown, void * pUserContext);
 
-
+void PrintGFSDKProfilerInfo();
 
 int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR /*lpszCmdLine*/, int /*nCmdShow*/)
 {
@@ -895,6 +896,8 @@ HRESULT CALLBACK OnD3D11CreateDevice(
 
 	V_RETURN(InitScene());
 
+	PrintGFSDKProfilerInfo();
+
 	return S_OK;
 }
 
@@ -1519,6 +1522,56 @@ void RenderText()
 	}
 
 	g_pTxtHelper->End();
+}
+
+void PrintGFSDKProfilerInfo()
+{
+	if (!g_bReportGFSDKProfileInfo)
+		return;
+
+	char* pInfoString = nullptr;
+	size_t outLength = 0;
+
+	gfsdk_new_delete_t allocator = { MallocForFaceWorks, FreeForFaceWorks };
+	GFSDK_FaceWorks_Result result = GFSDK_FaceWorks_Profiler_GetInfoString(&allocator, &pInfoString, &outLength);
+
+	switch (result)
+	{
+		case GFSDK_FaceWorks_InvalidArgument:
+		{
+			throw std::invalid_argument("GFSDK_FaceWorks_Profiler_GetInfoString() received a bad argument");
+		}
+		break;
+
+		case GFSDK_FaceWorks_OutOfMemory:
+		{
+			throw std::bad_alloc();
+		}
+		break;
+
+		case GFSDK_FaceWorks_OK:
+		{
+			// these are set to NULL/0 if there isn't any actual data available
+			if (pInfoString && outLength)
+			{
+#ifdef _DEBUG
+				DebugPrintfA(
+					"===============\nFaceWorks Profile Dump\n===============\n\n%s\n\n===============\n",
+					pInfoString
+				);
+#else
+				MessageBoxA(NULL, pInfoString, "Profile Results", MB_OK);
+#endif
+			}
+		}
+		break;
+
+		default:
+			throw std::runtime_error("GFSDK_FaceWorks_Profiler_GetInfoString() did not return GFSDK_FaceWorks_OK");
+			break;
+
+		break;
+	}
 }
 
 void CopyTexture(
